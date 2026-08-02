@@ -1,5 +1,7 @@
 # rozetka2
 
+**PROPRIETARY SOFTWARE - ALL RIGHTS RESERVED. See LICENSE for details.**
+
 `rozetka2` is a clean-room experimental x86_64-to-arm64 translator core for
 Apple Silicon Macs. It does not call, require, wrap, or depend on Apple's
 Rosetta 2.
