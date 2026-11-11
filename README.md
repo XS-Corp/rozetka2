@@ -1,5 +1,7 @@
 # rozetka2
 
+P.S. i know that now it doesnt start, but ill fix it as soon as i can, sry for this
+
 `rozetka2` is an experimental x86_64-to-arm64 translator/runtime for Apple
 Silicon Macs. It does not call, require, wrap, or depend on Apple's Rosetta 2.
 
