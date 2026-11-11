@@ -1,2 +1,13 @@
+# Build and test output
 build/
+logs/
+userdata/
+.savegame/
+
+# Local tools and caches
+.venv/
+__pycache__/
+*.py[cod]
+
+# macOS
 .DS_Store

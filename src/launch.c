@@ -149,6 +149,7 @@ static r2_status resolve_app_executable(const char *bundle_path,
 }
 
 r2_status r2_launch_path(const char *path,
+                         bool host_libraries,
                          const char *const *guest_argv,
                          size_t guest_argc,
                          char *error,
@@ -193,7 +194,7 @@ r2_status r2_launch_path(const char *path,
     }
 
     r2_result result = {0};
-    status = r2_run_macho_file(target, guest_argv, guest_argc, &result, error, error_len);
+    status = r2_run_macho_file(target, host_libraries, guest_argv, guest_argc, &result, error, error_len);
     if (status != R2_OK) {
         return status;
     }

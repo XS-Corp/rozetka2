@@ -15,16 +15,19 @@ enum {
     CPU_TYPE_ARM64 = 0x0100000c,
     LC_SEGMENT_64 = 0x19,
     LC_LOAD_DYLIB = 0x0c,
-    LC_LOAD_WEAK_DYLIB = 0x18,
-    LC_REEXPORT_DYLIB = 0x1f,
-    LC_LOAD_UPWARD_DYLIB = 0x23,
-    LC_MAIN = 0x80000028,
-    VM_PROT_WRITE = 0x02
+    LC_LOAD_WEAK_DYLIB = 0x80000018u,
+    LC_REEXPORT_DYLIB = 0x8000001fu,
+    LC_LOAD_UPWARD_DYLIB = 0x80000023u,
+    LC_MAIN = 0x80000028
 };
 
-#define R2_ARGV_BASE 0x600000000000ull
-#define R2_MAX_GUEST_ARGC 256u
-#define R2_MAX_GUEST_ARGV_BYTES (1024u * 1024u)
+r2_status r2_dyld_run_macho_file(const char *path,
+                                 bool host_libraries,
+                                 const char *const *argv,
+                                 size_t argc,
+                                 r2_result *result,
+                                 char *error,
+                                 size_t error_len);
 
 static uint32_t read_be32(const uint8_t raw[4])
 {
@@ -50,11 +53,9 @@ static uint64_t read_le64(const uint8_t raw[8])
            ((uint64_t)raw[7] << 56);
 }
 
-static void write_le64(uint8_t raw[8], uint64_t value)
+static uint32_t read_fat32(const uint8_t raw[4], bool swapped)
 {
-    for (size_t i = 0; i < 8; i += 1) {
-        raw[i] = (uint8_t)((value >> (i * 8)) & 0xffu);
-    }
+    return swapped ? read_le32(raw) : read_be32(raw);
 }
 
 static const char *cpu_name(uint32_t cpu)
@@ -397,7 +398,8 @@ static r2_status find_x86_64_slice(FILE *file,
     }
 
     if (magic_be == FAT_MAGIC || magic_be == FAT_CIGAM) {
-        uint32_t nfat = read_be32(&header[4]);
+        bool swapped = magic_be == FAT_CIGAM;
+        uint32_t nfat = read_fat32(&header[4], swapped);
         if (nfat > 1024) {
             r2_set_error(error, error_len, "unreasonable number of Mach-O slices");
             return R2_ERR_DECODE;
@@ -408,10 +410,10 @@ static r2_status find_x86_64_slice(FILE *file,
             if (!read_at(file, 8ull + (uint64_t)i * sizeof(arch), arch, sizeof(arch), error, error_len)) {
                 return R2_ERR_IO;
             }
-            uint32_t cpu = read_be32(&arch[0]);
+            uint32_t cpu = read_fat32(&arch[0], swapped);
             if (cpu == CPU_TYPE_X86_64) {
-                *slice_offset = read_be32(&arch[8]);
-                *slice_size = read_be32(&arch[12]);
+                *slice_offset = read_fat32(&arch[8], swapped);
+                *slice_size = read_fat32(&arch[12], swapped);
                 return R2_OK;
             }
         }
@@ -422,61 +424,6 @@ static r2_status find_x86_64_slice(FILE *file,
 
     r2_set_error(error, error_len, "not a supported Mach-O header");
     return R2_ERR_DECODE;
-}
-
-static r2_status build_argv_region(const char *path,
-                                   const char *const *argv,
-                                   size_t argc,
-                                   r2_memory_region *region,
-                                   char *error,
-                                   size_t error_len)
-{
-    const char *default_argv[1] = {path};
-    if (argc == 0 || argv == NULL) {
-        argv = default_argv;
-        argc = 1;
-    }
-    if (argc > R2_MAX_GUEST_ARGC) {
-        r2_set_error(error, error_len, "too many guest argv entries");
-        return R2_ERR_UNSUPPORTED;
-    }
-
-    size_t pointer_bytes = (argc + 1u) * sizeof(uint64_t);
-    size_t total = pointer_bytes;
-    for (size_t i = 0; i < argc; i += 1) {
-        if (argv[i] == NULL) {
-            r2_set_error(error, error_len, "guest argv contains a null string");
-            return R2_ERR_BAD_ARGUMENT;
-        }
-        size_t len = strlen(argv[i]) + 1u;
-        if (len > R2_MAX_GUEST_ARGV_BYTES || total > R2_MAX_GUEST_ARGV_BYTES - len) {
-            r2_set_error(error, error_len, "guest argv data is too large");
-            return R2_ERR_UNSUPPORTED;
-        }
-        total += len;
-    }
-
-    uint8_t *data = calloc(1, total);
-    if (data == NULL) {
-        r2_set_error(error, error_len, "out of memory building guest argv");
-        return R2_ERR_NO_MEMORY;
-    }
-
-    size_t string_off = pointer_bytes;
-    for (size_t i = 0; i < argc; i += 1) {
-        uint64_t guest_ptr = R2_ARGV_BASE + string_off;
-        write_le64(&data[i * sizeof(uint64_t)], guest_ptr);
-        size_t len = strlen(argv[i]) + 1u;
-        memcpy(data + string_off, argv[i], len);
-        string_off += len;
-    }
-    write_le64(&data[argc * sizeof(uint64_t)], 0);
-
-    region->base = R2_ARGV_BASE;
-    region->size = total;
-    region->data = data;
-    region->writable = false;
-    return R2_OK;
 }
 
 r2_status r2_inspect_macho_file(const char *path, char *error, size_t error_len)
@@ -519,7 +466,8 @@ r2_status r2_inspect_macho_file(const char *path, char *error, size_t error_len)
     }
 
     if ((magic_be == FAT_MAGIC || magic_be == FAT_CIGAM) && got >= 8) {
-        uint32_t nfat = read_be32(&header[4]);
+        bool swapped = magic_be == FAT_CIGAM;
+        uint32_t nfat = read_fat32(&header[4], swapped);
         printf("Universal Mach-O: %u slice(s)\n", nfat);
 
         if (nfat > 1024) {
@@ -545,9 +493,9 @@ r2_status r2_inspect_macho_file(const char *path, char *error, size_t error_len)
                 return R2_ERR_DECODE;
             }
 
-            uint32_t cpu = read_be32(&arch[0]);
-            uint32_t offset = read_be32(&arch[8]);
-            uint32_t size = read_be32(&arch[12]);
+            uint32_t cpu = read_fat32(&arch[0], swapped);
+            uint32_t offset = read_fat32(&arch[8], swapped);
+            uint32_t size = read_fat32(&arch[12], swapped);
             printf("  slice %u: cpu=%s (0x%08x), offset=%u, size=%u\n",
                    i,
                    cpu_name(cpu),
@@ -581,6 +529,7 @@ r2_status r2_inspect_macho_file(const char *path, char *error, size_t error_len)
 }
 
 r2_status r2_run_macho_file(const char *path,
+                            bool host_libraries,
                             const char *const *argv,
                             size_t argc,
                             r2_result *result,
@@ -590,14 +539,6 @@ r2_status r2_run_macho_file(const char *path,
     if (path == NULL || result == NULL) {
         r2_set_error(error, error_len, "null argument");
         return R2_ERR_BAD_ARGUMENT;
-    }
-
-    const char *default_argv[1] = {path};
-    const char *const *guest_argv = argv;
-    size_t guest_argc = argc;
-    if (guest_argv == NULL || guest_argc == 0) {
-        guest_argv = default_argv;
-        guest_argc = 1;
     }
 
     FILE *file = fopen(path, "rb");
@@ -626,148 +567,6 @@ r2_status r2_run_macho_file(const char *path,
         r2_set_error(error, error_len, "only executable Mach-O files can be launched");
         return R2_ERR_UNSUPPORTED;
     }
-    if (info.dylib_count != 0) {
-        fclose(file);
-        r2_set_error(error,
-                     error_len,
-                     "x86_64 Mach-O has %u dylib dependency/dependencies; dyld binding is not "
-                     "implemented yet",
-                     info.dylib_count);
-        return R2_ERR_UNSUPPORTED;
-    }
-    if (!info.has_entry) {
-        fclose(file);
-        r2_set_error(error, error_len, "x86_64 Mach-O has no LC_MAIN entry point");
-        return R2_ERR_UNSUPPORTED;
-    }
-    if (!info.has_text) {
-        fclose(file);
-        r2_set_error(error, error_len, "x86_64 Mach-O has no __TEXT,__text section");
-        return R2_ERR_UNSUPPORTED;
-    }
-    if (info.entry_vmaddr == 0) {
-        fclose(file);
-        r2_set_error(error, error_len, "could not translate LC_MAIN entry point to a VM address");
-        return R2_ERR_DECODE;
-    }
-
-    uint64_t text_end = info.text_offset + info.text_size;
-    if (text_end < info.text_offset || info.entryoff < info.text_offset ||
-        info.entryoff >= text_end) {
-        fclose(file);
-        r2_set_error(error, error_len, "LC_MAIN entry point is outside __TEXT,__text");
-        return R2_ERR_DECODE;
-    }
-
-    r2_memory_region regions[32];
-    memset(regions, 0, sizeof(regions));
-    size_t region_count = 0;
-    for (size_t i = 0; i < info.segment_count; i += 1) {
-        const macho64_segment *segment = &info.segments[i];
-        if (segment->filesize > segment->vmsize || segment->vmsize > 256ull * 1024ull * 1024ull) {
-            fclose(file);
-            r2_set_error(error, error_len, "segment %s has an unsupported mapping size",
-                         segment->name);
-            return R2_ERR_UNSUPPORTED;
-        }
-
-        uint8_t *data = calloc(1, (size_t)segment->vmsize);
-        if (data == NULL) {
-            fclose(file);
-            r2_set_error(error, error_len, "out of memory mapping segment %s", segment->name);
-            return R2_ERR_NO_MEMORY;
-        }
-
-        if (segment->filesize > 0 &&
-            !read_at(file,
-                     slice_offset + segment->fileoff,
-                     data,
-                     (size_t)segment->filesize,
-                     error,
-                     error_len)) {
-            free(data);
-            for (size_t j = 0; j < region_count; j += 1) {
-                free(regions[j].data);
-            }
-            fclose(file);
-            return R2_ERR_IO;
-        }
-
-        regions[region_count].base = segment->vmaddr;
-        regions[region_count].size = segment->vmsize;
-        regions[region_count].data = data;
-        regions[region_count].writable = (segment->initprot & VM_PROT_WRITE) != 0;
-        region_count += 1;
-    }
-
-    if (region_count >= sizeof(regions) / sizeof(regions[0])) {
-        for (size_t i = 0; i < region_count; i += 1) {
-            free(regions[i].data);
-        }
-        fclose(file);
-        r2_set_error(error, error_len, "too many mapped regions");
-        return R2_ERR_UNSUPPORTED;
-    }
-
-    status =
-        build_argv_region(path, guest_argv, guest_argc, &regions[region_count], error, error_len);
-    if (status != R2_OK) {
-        for (size_t i = 0; i < region_count; i += 1) {
-            free(regions[i].data);
-        }
-        fclose(file);
-        return status;
-    }
-    region_count += 1;
-
-    uint64_t code_len64 = text_end - info.entryoff;
-    if (code_len64 == 0 || code_len64 > SIZE_MAX) {
-        for (size_t i = 0; i < region_count; i += 1) {
-            free(regions[i].data);
-        }
-        fclose(file);
-        r2_set_error(error, error_len, "entry code size is not representable");
-        return R2_ERR_DECODE;
-    }
-
-    uint8_t *code = malloc((size_t)code_len64);
-    if (code == NULL) {
-        for (size_t i = 0; i < region_count; i += 1) {
-            free(regions[i].data);
-        }
-        fclose(file);
-        r2_set_error(error, error_len, "out of memory reading Mach-O entry code");
-        return R2_ERR_NO_MEMORY;
-    }
-
-    if (!read_at(file, slice_offset + info.entryoff, code, (size_t)code_len64, error, error_len)) {
-        free(code);
-        for (size_t i = 0; i < region_count; i += 1) {
-            free(regions[i].data);
-        }
-        fclose(file);
-        return R2_ERR_IO;
-    }
     fclose(file);
-
-    r2_block block;
-    status = r2_decode_block(code, (size_t)code_len64, &block, error, error_len);
-    if (status == R2_OK) {
-        r2_interp_env env = {
-            .rip_base = info.entry_vmaddr,
-            .regions = regions,
-            .region_count = region_count,
-            .has_initial_regs = true,
-        };
-        env.initial_regs[R2_X86_RDI] = guest_argc;
-        env.initial_regs[R2_X86_RSI] = R2_ARGV_BASE;
-        env.initial_regs[R2_X86_RDX] = 0;
-        status = r2_interp_block_with_env(&block, &env, result, error, error_len);
-    }
-
-    free(code);
-    for (size_t i = 0; i < region_count; i += 1) {
-        free(regions[i].data);
-    }
-    return status;
+    return r2_dyld_run_macho_file(path, host_libraries, argv, argc, result, error, error_len);
 }

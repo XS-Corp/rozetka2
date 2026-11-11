@@ -20,7 +20,7 @@ static void usage(FILE *stream)
             "Usage:\n"
             "  rozetka2 run [--engine interp|jit] <raw-x86_64-function.bin>\n"
             "  rozetka2 inspect <mach-o-file>\n"
-            "  rozetka2 launch <mach-o-file-or-app-bundle> [-- guest-arg ...]\n"
+            "  rozetka2 launch [--host-libs] <mach-o-file-or-app-bundle> [-- guest-arg ...]\n"
             "\n"
             "The run command executes a supported raw x86_64 function blob ending in ret.\n"
             "The launch command resolves app targets and runs supported simple x86_64 Mach-O files.\n");
@@ -188,14 +188,20 @@ static int launch_command(int argc, char **argv)
         return 2;
     }
 
-    const char *path = argv[2];
+    bool host_libraries = strcmp(argv[2], "--host-libs") == 0;
+    int path_index = host_libraries ? 3 : 2;
+    if (argc <= path_index) {
+        usage(stderr);
+        return 2;
+    }
+    const char *path = argv[path_index];
     int guest_start = argc;
-    if (argc > 3) {
-        if (strcmp(argv[3], "--") != 0) {
+    if (argc > path_index + 1) {
+        if (strcmp(argv[path_index + 1], "--") != 0) {
             fprintf(stderr, "launch guest arguments must follow --\n");
             return 2;
         }
-        guest_start = 4;
+        guest_start = path_index + 2;
     }
 
     size_t extra_argc = (size_t)(argc - guest_start);
@@ -211,7 +217,7 @@ static int launch_command(int argc, char **argv)
 
     char error[R2_ERROR_CAP] = {0};
     r2_status status =
-        r2_launch_path(path, guest_argv, extra_argc + 1u, error, sizeof(error));
+        r2_launch_path(path, host_libraries, guest_argv, extra_argc + 1u, error, sizeof(error));
     free(guest_argv);
     if (status != R2_OK) {
         fprintf(stderr, "rozetka2: %s: %s\n", r2_status_name(status), error);
