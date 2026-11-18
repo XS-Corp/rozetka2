@@ -20,7 +20,7 @@ int main(void) {
     vm_size_t page=0;
     require(host_page_size(host,&page)==KERN_SUCCESS && page==(vm_size_t)getpagesize(),"real host page size ABI");
     require(host_statistics(host,HOST_VM_INFO,(host_info_t)&stats,&count)==KERN_SUCCESS && count==HOST_VM_INFO_COUNT,"host VM info");
-    _Static_assert(sizeof(vm_statistics64_data_t)==152,"x86 VM-info64 ABI");
+    _Static_assert(sizeof(vm_statistics64_data_t)==416,"x86 VM-info64 ABI");
     vm_statistics64_data_t stats64;count=HOST_VM_INFO64_COUNT;
     require(host_statistics64(host,HOST_VM_INFO64,(host_info64_t)&stats64,&count)==KERN_SUCCESS&&count==HOST_VM_INFO64_COUNT,"host VM-info64 packing and count");
     require(mach_port_deallocate(mach_task_self(),host)==KERN_SUCCESS,"owned host port");

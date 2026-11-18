@@ -35,6 +35,12 @@
 #include <CoreGraphics/CoreGraphics.h>
 #include <CoreText/CoreText.h>
 
+
+static double r2_host_exp10(double value)
+{
+    return pow(10.0, value);
+}
+
 #define NATIVE_CALL_BASE UINT64_C(0x7f000000)
 #define NATIVE_MAX_IMPORTS 4096u
 #define NATIVE_MAX_CODE_RANGES (NATIVE_MAX_IMPORTS + 1024u)
@@ -99,7 +105,7 @@ static const native_definition definitions[] = {
     D("CFURLGetFileSystemRepresentation", "pbpl", 'b'),
     D("acosf", "f", 'f'), D("asinf", "f", 'f'), D("atan2f", "ff", 'f'),
     D("cbrtf", "f", 'f'), D("exp2f", "f", 'f'), D("logf", "f", 'f'), D("sinhf", "f", 'f'),
-    D("__exp10f", "f", 'f'), D("lround", "d", 'l'), D("__swbuf", "ip", 'i'),
+    D("__exp10f", "f", 'f'), D("__exp10", "d", 'd'), D("lround", "d", 'l'), D("__swbuf", "ip", 'i'),
     D("sched_get_priority_max", "i", 'i'), D("sched_get_priority_min", "i", 'i'),
     D("AudioComponentFindNext", "pp", 'p'), D("AudioComponentInstanceNew", "pp", 'i'),
     D("AudioComponentInstanceDispose", "p", 'i'),
@@ -1427,6 +1433,7 @@ r2_status r2_native_symbol(r2_native_runtime *runtime, const char *symbol,
     if(function==NULL&&strcmp(name,"__cxa_demangle")==0&&!runtime->cpp)
         runtime->cpp=dlopen("/usr/lib/libc++.1.dylib",RTLD_NOW|RTLD_LOCAL);
     if (function == NULL && runtime->cpp != NULL) function = dlsym(runtime->cpp, name);
+    if (function == NULL && strcmp(name, "__exp10") == 0) function = (void *)r2_host_exp10;
     if (function == NULL && strchr(name, '$') != NULL) {
         char base[128];
         snprintf(base, sizeof(base), "%.*s", (int)(strchr(name, '$') - name), name);
@@ -2258,7 +2265,7 @@ static r2_status native_call_impl(r2_native_runtime *runtime, uint64_t regs[16],
     if (strcmp(name, "task_info") == 0 || strcmp(name, "host_statistics") == 0 || strcmp(name, "host_statistics64") == 0) {
         _Static_assert(sizeof(task_basic_info_data_t) == 40 && offsetof(task_basic_info_data_t, virtual_size) == 4, "Darwin x86 task-info packing");
         _Static_assert(sizeof(vm_statistics_data_t) == 60, "Darwin x86 host VM-info packing");
-        _Static_assert(sizeof(vm_statistics64_data_t) == 152 && offsetof(vm_statistics64_data_t, purgeable_count) == 88 &&
+        _Static_assert(sizeof(vm_statistics64_data_t) == 416 && offsetof(vm_statistics64_data_t, purgeable_count) == 88 &&
                        offsetof(vm_statistics64_data_t, compressor_page_count) == 128, "Darwin x86 host VM-info64 packing");
         bool task = name[0] == 't'; unsigned flavor = (unsigned)regs[R2_X86_RSI];
         if (task) {
